@@ -16,10 +16,14 @@ st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
     
-    html, body, [class*="css"] {
-        font-family: 'Inter', sans-serif;
-        background-color: #121212;
-        color: #e0e0e0;
+    /* Force Dark Mode Backgrounds */
+    .stApp, .stAppViewContainer, .stMain, [data-testid="stAppViewContainer"], .main {
+        background-color: #121212 !important;
+        color: #e0e0e0 !important;
+    }
+    
+    html, body {
+        background-color: #121212 !important;
     }
     
     /* Header */
