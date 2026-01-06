@@ -16,22 +16,44 @@ CACHE_FILE = ".scanner_cache.pkl"
 WATCHLIST_CACHE_FILE = ".watchlist_cache.pkl"
 
 def load_cached_results():
-    """Load scanner results from cache file"""
+    """Load scanner results from cache file with 5-minute expiration"""
     if os.path.exists(CACHE_FILE):
         try:
             with open(CACHE_FILE, 'rb') as f:
-                return pickle.load(f)
+                data = pickle.load(f)
+                # Check 5-minute inactivity (300 seconds)
+                if time.time() - data.get('last_heartbeat', 0) > 300:
+                    os.remove(CACHE_FILE)
+                    return None
+                return data
         except:
             return None
     return None
 
 def save_cached_results(results, timestamp):
-    """Save scanner results to cache file"""
+    """Save scanner results to cache file with heartbeat"""
     try:
+        current_time = time.time()
         with open(CACHE_FILE, 'wb') as f:
-            pickle.dump({'results': results, 'timestamp': timestamp}, f)
+            pickle.dump({
+                'results': results, 
+                'timestamp': timestamp,
+                'last_heartbeat': current_time
+            }, f)
     except:
         pass
+
+def update_cache_heartbeat():
+    """Update only the heartbeat timestamp to keep cache alive"""
+    if os.path.exists(CACHE_FILE):
+        try:
+            with open(CACHE_FILE, 'rb') as f:
+                data = pickle.load(f)
+            data['last_heartbeat'] = time.time()
+            with open(CACHE_FILE, 'wb') as f:
+                pickle.dump(data, f)
+        except:
+            pass
 
 def clear_cached_results():
     """Clear cached scanner results"""
@@ -217,6 +239,26 @@ def get_stock_data(ticker):
             
         return hist, pbv, info
     except Exception as e:
+        return None
+
+@st.cache_data(ttl=300)
+def get_ihsg_info():
+    try:
+        ihsg = yf.Ticker("^JKSE")
+        hist = ihsg.history(period="2d")
+        if len(hist) < 2: return None
+        
+        current_price = hist['Close'].iloc[-1]
+        prev_price = hist['Close'].iloc[-2]
+        change = current_price - prev_price
+        change_pct = (change / prev_price) * 100
+        
+        return {
+            'price': current_price,
+            'change': change,
+            'percent': change_pct
+        }
+    except:
         return None
 
 def get_news_sentiment(ticker):
@@ -816,6 +858,27 @@ current_symbol = st.session_state.ticker_selector
 # Top Bar (Symbol Info) with Logo
 logo_url = f"https://assets.stockbit.com/logos/companies/{current_symbol}.png"
 
+# --- IHSG DATA ---
+ihsg_data = get_ihsg_info()
+if ihsg_data:
+    ihsg_p = f"{ihsg_data['price']:,.2f}"
+    ihsg_c = f"{ihsg_data['change']:+.2f}"
+    ihsg_pct = f"{ihsg_data['percent']:+.2f}%"
+    ihsg_color = "#00c853" if ihsg_data['change'] >= 0 else "#ff5252"
+    ihsg_trend = "↗" if ihsg_data['change'] >= 0 else "↘"
+    market_sentiment = "POSITIVE" if ihsg_data['change'] >= 0 else "NEGATIVE"
+    sentiment_bg = "rgba(0, 200, 83, 0.1)" if ihsg_data['change'] >= 0 else "rgba(255, 82, 82, 0.1)"
+    sentiment_color = "#00c853" if ihsg_data['change'] >= 0 else "#ff5252"
+else:
+    ihsg_p = "7,215.30"
+    ihsg_c = "-12.45"
+    ihsg_pct = "-0.17%"
+    ihsg_color = "#ff5252"
+    ihsg_trend = "↘"
+    market_sentiment = "NEUTRAL"
+    sentiment_bg = "rgba(255, 255, 255, 0.05)"
+    sentiment_color = "#848e9c"
+
 header_html = f"""
 <div style="background: rgba(30, 34, 45, 0.7); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); padding: 10px 20px; border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.05); display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; margin-top: -12px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
     <div style="display: flex; align-items: center; gap: 12px;">
@@ -826,18 +889,28 @@ header_html = f"""
         </div>
         <span style="background: rgba(0, 200, 83, 0.1); color: #00c853; padding: 5px 10px; border-radius: 4px; font-size: 10px; font-weight: 700; border: 1px solid rgba(0, 200, 83, 0.2); letter-spacing: 0.5px; margin-left: 8px;">MARKET OPEN</span>
     </div>
+    <div style="display: flex; align-items: center; gap: 20px;">
+        <div style="text-align: right;">
+            <div style="font-size: 10px; color: #848e9c; font-weight: 600; text-transform: uppercase; margin-bottom: 2px;">IHSG Index {ihsg_trend}</div>
+            <div style="font-size: 16px; font-weight: 700; color: #fff;">{ihsg_p} <span style="color: {ihsg_color}; font-size: 12px; margin-left: 4px;">{ihsg_c} ({ihsg_pct})</span></div>
+        </div>
+        <div style="background: {sentiment_bg}; border: 1px solid {sentiment_color}44; padding: 6px 12px; border-radius: 4px; text-align: center;">
+            <div style="font-size: 9px; color: #848e9c; font-weight: 600; text-transform: uppercase;">Sentiment</div>
+            <div style="font-size: 11px; font-weight: 800; color: {sentiment_color};">{market_sentiment}</div>
+        </div>
+    </div>
 </div>
 """
 
 st.markdown(header_html, unsafe_allow_html=True)
 
+
 # Main Content Tabs
-tab_chart, tab_financials, tab_profile = st.tabs(["🔥 Chart", "📊 Financials", "🏢 Profile"])
+tab_chart, tab_financials = st.tabs(["🔥 Chart", "📊 Financials"])
 
 with tab_chart:
-    # Split Layout for Chart
+    # Layout: Chart on Left, Order Book on Right
     c_chart, c_orderbook = st.columns([3, 1])
-
 
     with c_chart:
         # TradingView Chart
@@ -878,114 +951,37 @@ with tab_chart:
             </script>
             </div>
             """,
-            height=550,
+            height=580,
         )
 
-        # --- MOVED SCREENER & ANALYSIS ---
-        st.write("")
-        st.markdown("### Market Screener & AI Analysis")
-
-        # Control Bar
-        b1, b2, b3 = st.columns([2, 1, 6])
-        with b1:
-            if st.button("RUN SCREENER", use_container_width=True, type="primary"):
-                st.session_state.run_screener = True
-        with b2:
-            if st.button("🧹 Clear", use_container_width=True):
-                st.session_state.scan_results = None
-                st.session_state.last_update = None
-                clear_cached_results()  # Clear cache file
-                st.rerun()
-
+        # --- COMPANY PROFILE (NEW LOCATION) ---
         st.markdown("---")
-
-        # --- SCANNER LOGIC ---
-        # Load from cache if available
-        if 'scan_results' not in st.session_state:
-            cached_data = load_cached_results()
-            if cached_data:
-                st.session_state.scan_results = cached_data['results']
-                st.session_state.last_update = cached_data['timestamp']
-            else:
-                st.session_state.scan_results = None
-
-        # Logic triggered by Sidebar Button
-        if st.session_state.get('run_screener', False):
-            st.session_state.run_screener = False # Reset trigger
-            with st.spinner(f'Scanning {len(TICKERS)} Stocks across IDX...'):
-                results = []
-                progress_bar = st.progress(0)
-                
-                # Parallel processing using ThreadPoolExecutor
-                with ThreadPoolExecutor(max_workers=10) as executor:
-                    # Map tickers to analyze_stock function
-                    future_to_ticker = {executor.submit(analyze_stock, t): t for t in TICKERS}
-                    
-                    for i, future in enumerate(future_to_ticker):
-                        res = future.result()
-                        if res: 
-                            results.append(res)
-                        # Update progress bar
-                        progress_bar.progress(min((i + 1) / len(TICKERS), 1.0))
-                    
-                progress_bar.empty()
-                
-                if results:
-                    st.session_state.scan_results = pd.DataFrame(results)
-                    st.session_state.last_update = time.strftime("%H:%M WIB")
-                    # Save to cache
-                    save_cached_results(st.session_state.scan_results, st.session_state.last_update)
-                    st.success(f"Scan Completed. Found {len(st.session_state.scan_results[st.session_state.scan_results['Status'] != 'HOLD'])} potential assets.")
+        try:
+            yf_ticker = yf.Ticker(current_symbol + ".JK")
+            info = yf_ticker.info
+            
+            st.markdown(f"### 🏢 {info.get('longName', current_symbol)}")
+            
+            p1, p2 = st.columns([2, 1])
+            with p1:
+                st.caption(f"Sector: **{info.get('sector', '-')}** | Industry: **{info.get('industry', '-')}**")
+                st.write(info.get('longBusinessSummary', 'No description available.'))
+            with p2:
+                st.markdown("#### 👥 Key Executives")
+                officers = info.get('companyOfficers', [])
+                if officers:
+                    # Filter and show top 3
+                    for off in officers[:3]:
+                        st.markdown(f"**{off.get('name')}**")
+                        st.caption(f"{off.get('title')}")
                 else:
-                    st.warning("No data fetched or no match found.")
-                    st.session_state.scan_results = None
-
-        # Display Logic
-        if st.session_state.scan_results is not None:
-            df = st.session_state.scan_results
-            
-            # Tabs for Result View
-            tab_grid, tab_table = st.tabs(["🔲 Grid View", "📋 Table View"])
-            
-            with tab_grid:
-                valid_rows = [r for i, r in df.iterrows() if r['Status'] != 'HOLD']
-                cols = st.columns(3)
-                for idx, row in enumerate(valid_rows):
-                    with cols[idx % 3]:
-                        with st.container(border=True):
-                            st.markdown(f"### {row['Ticker']}")
-                            if 'STRONG BUY' in row['Status']: st.markdown(":fire: **STRONG BUY**")
-                            else: st.markdown(":white_check_mark: **WATCHLIST**")
-                            
-                            st.progress(row['Sentiment Score'] / 100.0, text=f"Sentiment: {row['Sentiment']}")
-                            st.markdown("---")
-                            
-                            k1, k2, k3 = st.columns(3)
-                            k1.metric("Trend", row['MA Trend'])
-                            k2.metric("Vol", f"{row['Raw Vol Ratio']:.1f}x")
-                            k3.metric("PBV", f"{row['Raw PBV']:.2f}x")
-                            
-                            st.markdown("---")
-                            st.write(row['Analysis'])
-                            
-                            with st.expander("📰 Lihat Berita"):
-                                if row['News List']:
-                                    for news in row['News List']:
-                                        st.caption(f"{news.get('date')} - {news.get('source')}")
-                                        st.markdown(f"[{news.get('title')}]({news.get('link')})")
-                                else: st.write("-")
-                            
-                            st.button(f"📈 Load", key=f"btn_g_{idx}", on_click=set_ticker, args=(row['Ticker'],), use_container_width=True)
-
-            with tab_table:
-                st.dataframe(
-                    df, 
-                    use_container_width=True,
-                    column_order=["Ticker", "Status", "Price", "Change %", "Vol Ratio", "Sentiment Score", "Headline"],
-                    height=400
-                )
-
-        
+                    st.write("No executive info available.")
+                
+                if info.get('website'):
+                    st.markdown(f"🌐 [Visit Website]({info.get('website')})")
+                    
+        except:
+            st.warning("Profile data unavailable.")
 
 
     with c_orderbook:
@@ -1205,6 +1201,114 @@ with tab_chart:
 </div>
 """, unsafe_allow_html=True)
 
+    # --- MARKET SCREENER & AI ANALYSIS ---
+    st.write("")
+    st.markdown("### Market Screener & AI Analysis")
+
+    # Control Bar
+    b1, b2, b3 = st.columns([2, 1, 6])
+    with b1:
+        if st.button("RUN SCREENER", key="run_scr_main", use_container_width=True, type="primary"):
+            st.session_state.run_screener = True
+    with b2:
+        if st.button("🧹 Clear", key="clear_scr_main", use_container_width=True):
+            st.session_state.scan_results = None
+            st.session_state.last_update = None
+            clear_cached_results()  # Clear cache file
+            st.rerun()
+
+    st.markdown("---")
+
+    # --- SCANNER LOGIC ---
+    # Load from cache if available (check 5-min expiration)
+    if 'scan_results' not in st.session_state:
+        cached_data = load_cached_results()
+        if cached_data:
+            st.session_state.scan_results = cached_data['results']
+            st.session_state.last_update = cached_data['timestamp']
+        else:
+            st.session_state.scan_results = None
+    
+    # If results are showing, update heartbeat to prevent expiration while using
+    if st.session_state.scan_results is not None:
+        update_cache_heartbeat()
+
+    # Logic triggered by Sidebar Button or Local Button
+    if st.session_state.get('run_screener', False):
+        st.session_state.run_screener = False # Reset trigger
+        with st.spinner(f'Scanning {len(TICKERS)} Stocks across IDX...'):
+            results = []
+            progress_bar = st.progress(0)
+            
+            # Parallel processing using ThreadPoolExecutor
+            with ThreadPoolExecutor(max_workers=10) as executor:
+                # Map tickers to analyze_stock function
+                future_to_ticker = {executor.submit(analyze_stock, t): t for t in TICKERS}
+                
+                for i, future in enumerate(future_to_ticker):
+                    res = future.result()
+                    if res: 
+                        results.append(res)
+                    # Update progress bar
+                    progress_bar.progress(min((i + 1) / len(TICKERS), 1.0))
+                
+            progress_bar.empty()
+            
+            if results:
+                st.session_state.scan_results = pd.DataFrame(results)
+                st.session_state.last_update = time.strftime("%H:%M WIB")
+                # Save to cache
+                save_cached_results(st.session_state.scan_results, st.session_state.last_update)
+                st.success(f"Scan Completed. Found {len(st.session_state.scan_results[st.session_state.scan_results['Status'] != 'HOLD'])} potential assets.")
+            else:
+                st.warning("No data fetched or no match found.")
+                st.session_state.scan_results = None
+
+    # Display Logic
+    if st.session_state.scan_results is not None:
+        df = st.session_state.scan_results
+        
+        # Tabs for Result View
+        tab_grid, tab_table = st.tabs(["🔲 Grid View", "📋 Table View"])
+        
+        with tab_grid:
+            valid_rows = [r for i, r in df.iterrows() if r['Status'] != 'HOLD']
+            cols = st.columns(3)
+            for idx, row in enumerate(valid_rows):
+                with cols[idx % 3]:
+                    with st.container(border=True):
+                        st.markdown(f"### {row['Ticker']}")
+                        if 'STRONG BUY' in row['Status']: st.markdown(":fire: **STRONG BUY**")
+                        else: st.markdown(":white_check_mark: **WATCHLIST**")
+                        
+                        st.progress(row['Sentiment Score'] / 100.0, text=f"Sentiment: {row['Sentiment']}")
+                        st.markdown("---")
+                        
+                        k1, k2, k3 = st.columns(3)
+                        k1.metric("Trend", row['MA Trend'])
+                        k2.metric("Vol", f"{row['Raw Vol Ratio']:.1f}x")
+                        k3.metric("PBV", f"{row['Raw PBV']:.2f}x")
+                        
+                        st.markdown("---")
+                        st.write(row['Analysis'])
+                        
+                        with st.expander("📰 Lihat Berita"):
+                            if row['News List']:
+                                for news in row['News List']:
+                                    st.caption(f"{news.get('date')} - {news.get('source')}")
+                                    st.markdown(f"[{news.get('title')}]({news.get('link')})")
+                            else: st.write("-")
+                        
+                        st.button(f"📈 Load", key=f"btn_g_main_{idx}", on_click=set_ticker, args=(row['Ticker'],), use_container_width=True)
+
+        with tab_table:
+            st.dataframe(
+                df, 
+                use_container_width=True,
+                column_order=["Ticker", "Status", "Price", "Change %", "Vol Ratio", "Sentiment Score", "Headline"],
+                height=400
+            )
+
 with tab_financials:
     st.markdown(f"### 📊 Financial Highlights: {current_symbol}")
     
@@ -1229,33 +1333,6 @@ with tab_financials:
         
     except Exception as e:
         st.error(f"Failed to fetch financial data: {e}")
-        st.info("Showing mock data instead for demonstration.")
-        
-        # Mock Data Fallback
-        f1, f2, f3 = st.columns(3)
-        with f1:
-            st.metric("Market Cap", "Rp 1,050 T")
-            st.metric("Trailing P/E", "24.5x")
-        with f2:
-            st.metric("Revenue (TTM)", "Rp 85.2 T")
-            st.metric("Price/Book", "4.2x")
-        with f3:
-            st.metric("Dividend Yield", "2.1%")
-            st.metric("ROE", "18.5%")
-
-with tab_profile:
-    try:
-        yf_ticker = yf.Ticker(current_symbol + ".JK")
-        info = yf_ticker.info
-        
-        st.markdown(f"### {info.get('longName', current_symbol)}")
-        st.caption(f"Sector: {info.get('sector', '-')} | Industry: {info.get('industry', '-')}")
-        st.write(info.get('longBusinessSummary', 'No description available.'))
-        
-        if info.get('website'):
-            st.markdown(f"**Website**: [{info.get('website')}]({info.get('website')})")
-            
-    except:
         st.warning("Profile data unavailable.")
 
 
