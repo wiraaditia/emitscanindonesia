@@ -7,250 +7,138 @@ from streamlit_autorefresh import st_autorefresh
 import streamlit.components.v1 as components
 import time
 import random
+from concurrent.futures import ThreadPoolExecutor
 
 # --- CONFIG DASHBOARD ---
 st.set_page_config(page_title="EmitScan Indonesia", page_icon="favicon.png", layout="wide")
 
 # --- CUSTOM CSS STOCKBIT STYLE ---
+# --- CUSTOM CSS PREMIUM DARK STYLE ---
 st.markdown("""
 <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
     
-    /* Force Dark Mode Backgrounds */
-    .stApp, .stAppViewContainer, .stMain, [data-testid="stAppViewContainer"], .main {
-        background-color: #121212 !important;
+    /* Global Reset & Font */
+    html, body, [class*="css"] {
+        font-family: 'Inter', sans-serif !important;
+        background-color: #0b0e11 !important; /* Deep dark background */
         color: #e0e0e0 !important;
     }
     
-    html, body {
-        background-color: #121212 !important;
+    /* Sidebar Styling */
+    [data-testid="stSidebar"] {
+        background-color: #15191e !important;
+        border-right: 1px solid #2d343c;
     }
     
-    /* Header */
-    .header-title {
-        font-size: 32px;
-        font-weight: 700;
-        color: #ffffff;
-        margin-bottom: 5px;
+    /* Main Container */
+    .block-container {
+        padding-top: 2rem !important;
+        padding-bottom: 2rem !important;
+        max-width: 100% !important;
     }
     
-    .header-subtitle {
-        font-size: 16px;
-        color: #888888;
-        font-weight: 400;
-        margin-bottom: 20px;
-    }
-    
-    /* Card Container */
-    .stMetric, .stDataFrame, .element-container {
-        border-radius: 8px;
-    }
-    
-    /* Metrics */
+    /* Metrics / Cards */
     div[data-testid="stMetric"] {
-        background-color: #1e1e1e;
-        padding: 15px;
-        border-radius: 12px;
-        border: 1px solid #2d2d2d;
+        background-color: #1e2329;
+        padding: 12px 16px;
+        border-radius: 8px;
+        border: 1px solid #2d343c;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.2);
     }
     
     div[data-testid="stMetricLabel"] {
-        color: #a0a0a0 !important;
-        font-size: 14px !important;
-        font-weight: 500;
+        font-size: 12px !important;
+        color: #848e9c !important;
     }
     
     div[data-testid="stMetricValue"] {
-        color: #ffffff !important;
-        font-size: 26px !important;
-        font-weight: 700;
+        font-size: 20px !important;
+        color: #f0b90b !important; /* Binance Yellow for contrast */
     }
     
     /* Buttons */
     .stButton > button {
-        background-color: #00c853;
+        background-color: #2962ff; /* TradingView Blue */
         color: white;
-        border-radius: 8px;
         border: none;
-        padding: 10px 24px;
+        border-radius: 6px;
+        padding: 8px 16px;
         font-weight: 600;
         transition: all 0.2s;
     }
-    
     .stButton > button:hover {
-        background-color: #00e676;
-        box-shadow: 0 4px 12px rgba(0, 200, 83, 0.3);
+        background-color: #1e53e5;
+        box-shadow: 0 2px 8px rgba(41, 98, 255, 0.4);
     }
     
-    /* DataFrame Styling */
-    .stDataFrame {
-        border: 1px solid #2d2d2d;
-        border-radius: 8px;
-        overflow: hidden;
+    /* Table Styling */
+    [data-testid="stCheck"] { color: #848e9c; }
+    
+    div[data-testid="stDataFrame"] {
+        border: none !important;
     }
     
-    /* News Feed Card - Enhanced */
+    /* Dataframe Header */
+    thead tr th {
+        background-color: #15191e !important;
+        color: #848e9c !important;
+        font-size: 13px !important;
+        border-bottom: 1px solid #2d343c !important;
+    }
+    
+    /* Dataframe Cells */
+    tbody tr td {
+        background-color: #0b0e11 !important;
+        color: #eaecef !important;
+        font-size: 13px !important;
+        border-bottom: 1px solid #2d343c !important;
+    }
+    
+    /* News Feed Styles */
     .news-card {
-        background: linear-gradient(135deg, #1e1e1e 0%, #252525 100%);
-        border-radius: 16px;
-        padding: 20px;
-        border: 1px solid #2d2d2d;
-        margin-bottom: 16px;
-        transition: all 0.3s ease;
-        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+        background-color: #15191e;
+        border: 1px solid #2d343c;
+        border-radius: 8px;
+        padding: 16px;
+        margin-bottom: 12px;
     }
     
-    .news-card:hover {
-        border-color: #00c853;
-        box-shadow: 0 4px 16px rgba(0, 200, 83, 0.2);
-        transform: translateY(-2px);
-    }
-    
-    .news-ticker {
-        color: #00c853;
-        font-weight: 700;
-        font-size: 16px;
-        margin-right: 8px;
-        letter-spacing: 0.5px;
-    }
-    
-    /* Sentiment Badges - Dynamic Colors */
-    .sentiment-very-positive {
-        background: linear-gradient(135deg, #00e676 0%, #00c853 100%);
-        color: #000;
-        padding: 4px 12px;
-        border-radius: 6px;
-        font-size: 11px;
-        font-weight: 700;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-    }
-    
-    .sentiment-positive {
-        background-color: rgba(0, 200, 83, 0.25);
-        color: #00e676;
-        padding: 4px 12px;
-        border-radius: 6px;
-        font-size: 11px;
-        font-weight: 700;
-        text-transform: uppercase;
-        border: 1px solid #00c853;
-    }
-    
-    .sentiment-neutral {
-        background-color: rgba(158, 158, 158, 0.2);
-        color: #9e9e9e;
-        padding: 4px 12px;
-        border-radius: 6px;
-        font-size: 11px;
-        font-weight: 700;
-        text-transform: uppercase;
-    }
-    
-    .sentiment-negative {
-        background-color: rgba(255, 82, 82, 0.25);
-        color: #ff5252;
-        padding: 4px 12px;
-        border-radius: 6px;
-        font-size: 11px;
-        font-weight: 700;
-        text-transform: uppercase;
-        border: 1px solid #ff5252;
-    }
-    
-    .sentiment-very-negative {
-        background: linear-gradient(135deg, #ff5252 0%, #d32f2f 100%);
-        color: #fff;
-        padding: 4px 12px;
-        border-radius: 6px;
-        font-size: 11px;
-        font-weight: 700;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-    }
-    
-    /* Impact Badge */
-    .impact-high {
-        background-color: rgba(255, 193, 7, 0.2);
-        color: #ffc107;
-        padding: 3px 8px;
-        border-radius: 4px;
-        font-size: 10px;
-        font-weight: 600;
-        margin-left: 6px;
-    }
-    
-    .impact-medium {
-        background-color: rgba(33, 150, 243, 0.2);
-        color: #2196f3;
-        padding: 3px 8px;
-        border-radius: 4px;
-        font-size: 10px;
-        font-weight: 600;
-        margin-left: 6px;
-    }
-    
-    .impact-low {
-        background-color: rgba(158, 158, 158, 0.2);
-        color: #9e9e9e;
-        padding: 3px 8px;
-        border-radius: 4px;
-        font-size: 10px;
-        font-weight: 600;
-        margin-left: 6px;
-    }
-    
-    .news-headline {
-        margin-top: 12px;
+    .news-title {
         font-size: 14px;
-        line-height: 1.6;
-        color: #e0e0e0;
-        font-weight: 500;
-    }
-    
-    /* Sentiment Score Bar */
-    .sentiment-score-container {
-        margin-top: 12px;
-        margin-bottom: 8px;
-    }
-    
-    .sentiment-score-bar {
-        width: 100%;
-        height: 6px;
-        background-color: #2d2d2d;
-        border-radius: 3px;
-        overflow: hidden;
-        position: relative;
-    }
-    
-    .sentiment-score-fill {
-        height: 100%;
-        border-radius: 3px;
-        transition: width 0.5s ease;
-    }
-    
-    .score-text {
-        font-size: 11px;
-        color: #888;
-        margin-top: 4px;
-    }
-    
-    /* News Timeline Item */
-    .news-timeline-item {
-        background-color: #1a1a1a;
-        border-left: 3px solid #00c853;
-        padding: 10px 12px;
-        margin-bottom: 8px;
-        border-radius: 4px;
-        font-size: 12px;
-    }
-    
-    .news-source {
-        color: #666;
-        font-size: 10px;
         font-weight: 600;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
+        color: #eaecef;
+        margin-bottom: 8px;
+        text-decoration: none;
+    }
+    .news-title:hover {
+        color: #2962ff;
+    }
+    
+    .news-meta {
+        font-size: 11px;
+        color: #848e9c;
+    }
+    
+    /* Sentiment Badges */
+    .badge-bullish {
+        background-color: rgba(0, 230, 118, 0.15);
+        color: #00e676;
+        padding: 2px 8px;
+        border-radius: 4px;
+        font-size: 10px;
+        font-weight: 700;
+        border: 1px solid rgba(0, 230, 118, 0.3);
+    }
+    
+    .badge-bearish {
+        background-color: rgba(255, 82, 82, 0.15);
+        color: #ff5252;
+        padding: 2px 8px;
+        border-radius: 4px;
+        font-size: 10px;
+        font-weight: 700;
+        border: 1px solid rgba(255, 82, 82, 0.3);
     }
 
 </style>
@@ -321,20 +209,35 @@ def get_news_sentiment(ticker):
                 res = requests.get(url, headers=headers, timeout=5)
                 soup = BeautifulSoup(res.text, 'html.parser')
                 
+                # Helper to find date
+                def find_date(art_soup):
+                    # Try finding relative time strings
+                    for tag in art_soup.find_all(['span', 'div', 'p']):
+                        txt = tag.get_text().strip()
+                        if any(x in txt for x in ['lalu', 'WIB', 'ago', 'min', 'hour']):
+                            return txt
+                    return "Baru saja"
+
                 # CNBC Indonesia parsing
                 if 'cnbcindonesia' in url:
                     articles = soup.find_all('article', limit=5)
                     for article in articles:
                         try:
-                            title_elem = article.find('h2') or article.find('h3')
+                            title_elem = article.find('h2') or article.find('h3') or article.find('a', class_='title')
                             if title_elem:
                                 title = title_elem.get_text().strip()
                                 link_elem = article.find('a')
                                 link = link_elem['href'] if link_elem and 'href' in link_elem.attrs else ""
+                                if not link.startswith('http'):
+                                    link = 'https://www.cnbcindonesia.com' + link
+                                
+                                date_text = find_date(article)
+                                
                                 all_news.append({
                                     'title': title,
                                     'source': 'CNBC Indonesia',
-                                    'link': link
+                                    'link': link,
+                                    'date': date_text
                                 })
                         except:
                             continue
@@ -344,15 +247,21 @@ def get_news_sentiment(ticker):
                     articles = soup.find_all('article', limit=5)
                     for article in articles:
                         try:
-                            title_elem = article.find('h2') or article.find('h3')
+                            title_elem = article.find('h2') or article.find('h3') or article.find('a', class_='title')
                             if title_elem:
                                 title = title_elem.get_text().strip()
                                 link_elem = article.find('a')
                                 link = link_elem['href'] if link_elem and 'href' in link_elem.attrs else ""
+                                if not link.startswith('http'):
+                                    link = 'https://www.cnnindonesia.com' + link
+                                
+                                date_text = find_date(article)
+
                                 all_news.append({
                                     'title': title,
                                     'source': 'CNN Indonesia',
-                                    'link': link
+                                    'link': link,
+                                    'date': date_text
                                 })
                         except:
                             continue
@@ -366,15 +275,15 @@ def get_news_sentiment(ticker):
         
         # Advanced Sentiment Scoring (0-100)
         positive_keywords = {
-            'sangat_positif': ['rekor', 'melesat', 'booming', 'ekspansi besar', 'akuisisi', 'dividen jumbo', 'laba bersih naik'],
-            'positif': ['laba', 'naik', 'ekspansi', 'dividen', 'borong', 'untung', 'tumbuh', 'kinerja positif', 'buyback', 'rights issue'],
-            'cukup_positif': ['stabil', 'optimis', 'prospek', 'potensi', 'peluang', 'target']
+            'sangat_positif': ['rekor', 'melesat', 'booming', 'ekspansi besar', 'akuisisi', 'dividen jumbo', 'laba bersih naik', 'ara', 'terbang'],
+            'positif': ['laba', 'naik', 'ekspansi', 'dividen', 'borong', 'untung', 'tumbuh', 'kinerja positif', 'buyback', 'rights issue', 'akumulasi', 'progresif'],
+            'cukup_positif': ['stabil', 'optimis', 'prospek', 'potensi', 'peluang', 'target', 'rebound']
         }
         
         negative_keywords = {
-            'sangat_negatif': ['bangkrut', 'kolaps', 'skandal', 'fraud', 'suspend', 'delisting', 'rugi besar'],
-            'negatif': ['rugi', 'turun', 'merosot', 'anjlok', 'PHK', 'tutup', 'gagal', 'krisis'],
-            'cukup_negatif': ['risiko', 'tantangan', 'tekanan', 'penurunan', 'koreksi']
+            'sangat_negatif': ['bangkrut', 'kolaps', 'skandal', 'fraud', 'suspend', 'delisting', 'rugi besar', 'arb', 'anjlok parah'],
+            'negatif': ['rugi', 'turun', 'merosot', 'anjlok', 'PHK', 'tutup', 'gagal', 'krisis', 'distribusi', 'buang barang'],
+            'cukup_negatif': ['risiko', 'tantangan', 'tekanan', 'penurunan', 'koreksi', 'lemah']
         }
         
         # Calculate sentiment score
@@ -503,54 +412,116 @@ def analyze_stock(ticker):
         "Status": status,
         "Headline": headline,
         "News List": news_list,
-        "Analysis": analysis
+        "Analysis": analysis,
+        "Raw Vol Ratio": vol_ratio,
+        "Raw PBV": pbv
     }
-
-# --- MAIN UI ---
-st_autorefresh(interval=600000, key="datarefresh")
-
-# Navbar / Header Simpel
-st.markdown('<div class="header-title">EmitScan Indonesia</div>', unsafe_allow_html=True)
-st.markdown('<div class="header-subtitle">Professional Stock Screener with AI-Powered Sentiment Analysis</div>', unsafe_allow_html=True)
-
-# Metrics
-c1, c2, c3, c4 = st.columns(4)
-c1.metric("IHSG (Composite)", "7,350.12", "+0.45%") # Dummy realtime sim
-c2.metric("Market Sentiment", "BULLISH", "Strong Inflow")
-c3.metric("Scanned Assets", f"{len(TICKERS)} Stocks", "All Sectors")
-c4.metric("Last Update", time.strftime("%H:%M WIB"))
-
-# --- TRADINGVIEW CHART SECTION ---
-st.markdown("### 📈 Live Technical Chart")
-
-# Init Session State untuk Selectbox
-if 'ticker_selector' not in st.session_state:
-    st.session_state.ticker_selector = "COMPOSITE"
 
 # Helper untuk mengubah ticker dari News Feed
 def set_ticker(ticker):
     # Update langsung ke key milik selectbox
     st.session_state.ticker_selector = ticker.replace('.JK', '')
+    # Force switch to Market Dashboard
+    st.session_state.active_tab = "📈 Market Dashboard"
 
-# Pilihan Ticker (Widget langsung bind ke session_state via key)
-# Pastikan opsi ada di list
-chart_options = ["COMPOSITE"] + [t.replace('.JK', '') for t in TICKERS]
+# --- MAIN UI ---
+# --- SIDEBAR CONTROLS ---
+with st.sidebar:
+    st.markdown("## 📊 Screener Filters")
+    
+    # Ticker Selection
+    chart_options = ["COMPOSITE"] + [t.replace('.JK', '') for t in TICKERS]
+    st.selectbox("Select Ticker:", chart_options, key="ticker_selector")
+    
+    # Timeframe Selection
+    timeframe_map = {
+        "Daily": "D", "Weekly": "W", "Monthly": "M",
+        "4 Hours": "240", "1 Hour": "60", "30 Minutes": "30", "5 Minutes": "5"
+    }
+    if 'chart_timeframe' not in st.session_state: st.session_state.chart_timeframe = "Daily"
+    st.selectbox("Timeframe:", list(timeframe_map.keys()), key="chart_timeframe")
+    
+    st.markdown("---")
+    
+    # Action Buttons
+    if st.button("RUN SCREENER", type="primary", use_container_width=True):
+        st.session_state.run_screener = True
+    
+    if st.button("CLEAR RESULTS", use_container_width=True):
+        st.session_state.scan_results = None
+        st.rerun()
+        
+    st.markdown("---")
+    
+    # Status Indicators
+    st.caption(f"Last Update: {st.session_state.get('last_update', '-')}")
+    st.caption(f"Assets: {len(TICKERS)} Stocks")
 
-col_chart_sel, col_chart_space = st.columns([1, 3])
-with col_chart_sel:
-    # Selectbox akan otomatis baca/tulis ke st.session_state['ticker_selector']
-    st.selectbox(
-        "Select Ticker for Chart:", 
-        chart_options, 
-        key="ticker_selector"
-    )
+# --- MAIN LAYOUT ---
 
-# Ambil value dari state
-current_symbol = st.session_state.ticker_selector
-tv_symbol = "IDX:COMPOSITE" if current_symbol == "COMPOSITE" else f"IDX:{current_symbol}"
+# --- MAIN LAYOUT ---
 
-# Embed TradingView Widget
-st.components.v1.html(
+# Programmatic Navigation (Custom Tabs)
+if 'active_tab' not in st.session_state:
+    st.session_state.active_tab = "📈 Market Dashboard"
+
+# Custom CSS for Radio Buttons to look like Tabs
+st.markdown("""
+<style>
+    div.row-widget.stRadio > div {
+        flex-direction: row;
+        justify-content: center;
+        gap: 20px;
+        margin-bottom: 20px;
+    }
+    div.row-widget.stRadio > div > label {
+        background-color: #1e2329;
+        padding: 10px 20px;
+        border-radius: 8px;
+        border: 1px solid #2d343c;
+        cursor: pointer;
+        transition: all 0.2s;
+        font-weight: 600;
+        color: #848e9c;
+    }
+    div.row-widget.stRadio > div > label:hover {
+        background-color: #2d343c;
+        color: #e0e0e0;
+    }
+    div.row-widget.stRadio > div > label[data-baseweb="radio"] {
+        background-color: transparent;
+    }
+    /* Hide the default radio circle */
+    div.row-widget.stRadio div[role="radio"] {
+        display: none;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# Navigation Control
+current_tab = st.radio(
+    "", 
+    ["📈 Market Dashboard", "🔬 Research & News"], 
+    key="active_tab", 
+    label_visibility="collapsed"
+)
+
+if current_tab == "📈 Market Dashboard":
+    # Top Header & Metrics
+    c1, c2, c3 = st.columns([2, 1, 1])
+    with c1:
+        st.markdown("### 📈 Market Overview")
+    with c2:
+        st.metric("IHSG", "7,350.12", "+0.45%")
+    with c3:
+        st.metric("Sentiment", "BULLISH", "Strong Inflow")
+    
+    # Chart Section (Full Width)
+    current_symbol = st.session_state.ticker_selector
+    current_tf_code = timeframe_map[st.session_state.chart_timeframe]
+    tv_symbol = "IDX:COMPOSITE" if current_symbol == "COMPOSITE" else f"IDX:{current_symbol}"
+    
+    st.components.v1.html(
     f"""
     <div class="tradingview-widget-container">
       <div id="tradingview_chart"></div>
@@ -561,7 +532,7 @@ st.components.v1.html(
         "width": "100%",
         "height": 500,
         "symbol": "{tv_symbol}",
-        "interval": "D",
+        "interval": "{current_tf_code}",
         "timezone": "Asia/Jakarta",
         "theme": "dark",
         "style": "1",
@@ -579,45 +550,57 @@ st.components.v1.html(
 
 st.write("") # Spacer
 
-# --- SCANNER LOGIC WITH SESSION STATE ---
+st.write("") 
+
+# --- SCANNER LOGIC ---
 if 'scan_results' not in st.session_state:
     st.session_state.scan_results = None
 
-if st.button("RUN SCREENER", type="primary", use_container_width=True):
+# Logic triggered by Sidebar Button
+if st.session_state.get('run_screener', False):
+    st.session_state.run_screener = False # Reset trigger
     with st.spinner(f'Scanning {len(TICKERS)} Stocks across IDX...'):
         results = []
         progress_bar = st.progress(0)
         
-        # Batch processing simulation for UI responsiveness
-        step = 1.0 / len(TICKERS)
-        for i, t in enumerate(TICKERS):
-            res = analyze_stock(t)
-            if res: results.append(res)
-            progress_bar.progress(min((i+1)*step, 1.0))
-            time.sleep(0.05) # Prevent basic rate limit
+        # Parallel processing using ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            # Map tickers to analyze_stock function
+            future_to_ticker = {executor.submit(analyze_stock, t): t for t in TICKERS}
+            
+            for i, future in enumerate(future_to_ticker):
+                res = future.result()
+                if res: 
+                    results.append(res)
+                # Update progress bar
+                progress_bar.progress(min((i + 1) / len(TICKERS), 1.0))
             
         progress_bar.empty()
         
         if results:
             st.session_state.scan_results = pd.DataFrame(results)
+            st.session_state.last_update = time.strftime("%H:%M WIB")
             st.success(f"Scan Completed. Found {len(st.session_state.scan_results[st.session_state.scan_results['Status'] != 'HOLD'])} potential assets.")
         else:
             st.warning("No data fetched or no match found.")
             st.session_state.scan_results = None
 
 # --- DISPLAY RESULTS FROM STATE ---
-if st.session_state.scan_results is not None:
-    df = st.session_state.scan_results
-    
-    col_table, col_news = st.columns([2.5, 1])
-    
-    with col_table:
-        st.subheader("Market Screener Result")
+# --- DISPLAY LOGIC ---
+if current_tab == "🔬 Research & News":
+    # 1. Check Data Availability
+    if st.session_state.scan_results is None:
+        st.info("Silakan jalankan 'RUN SCREENER' di sidebar terlebih dahulu untuk melihat data riset.")
+    else:
+        df = st.session_state.scan_results
+        
+        # 2. TABLE SECTION (FULL WIDTH)
+        st.markdown("### 📋 Screened Stocks Result")
         
         # Highlight Function
         def format_row(row):
             color = ''
-            if 'STRONG BUY' in row['Status']: color = 'background-color: rgba(0, 200, 83, 0.15)'
+            if 'STRONG BUY' in row['Status']: color = 'background-color: rgba(0, 230, 118, 0.1)'
             elif 'WATCHLIST' in row['Status']: color = 'background-color: rgba(255, 193, 7, 0.1)'
             return [color] * len(row)
 
@@ -631,207 +614,54 @@ if st.session_state.scan_results is not None:
             }), 
             use_container_width=True,
             column_order=["Ticker", "Status", "Price", "Change %", "Vol Ratio", "PBV", "MA Trend", "Sentiment"],
-            height=600
+            height=500
         )
         
-    with col_news:
-        st.subheader("📰 AI News Intelligence")
-        with st.container(height=600):
-            for i, row in df.iterrows():
-                if row['Status'] != 'HOLD': 
-                    # Determine sentiment badge class
-                    sentiment = row['Sentiment']
-                    if sentiment == "VERY POSITIVE":
-                        sentiment_class = "sentiment-very-positive"
-                    elif sentiment == "POSITIVE":
-                        sentiment_class = "sentiment-positive"
-                    elif sentiment == "NEUTRAL":
-                        sentiment_class = "sentiment-neutral"
-                    elif sentiment == "NEGATIVE":
-                        sentiment_class = "sentiment-negative"
-                    else:
-                        sentiment_class = "sentiment-very-negative"
+        st.caption("Tip: Klik tombol 'Load Chart' di tab Research untuk analisis per saham.")
+        st.markdown("---")
+        df = st.session_state.scan_results
+        st.markdown("### 📰 AI News & Deep Analysis")
+        
+        # Use Expander for each stock to keep UI clean
+        for i, row in df.iterrows():
+            if row['Status'] != 'HOLD': 
+                with st.expander(f"{row['Ticker']} - {row['Status']} ({row['Sentiment']})", expanded=False):
+                    # Layout: 2 Columns (News vs Analysis)
+                    c_news, c_analysis = st.columns([1, 1])
                     
-                    # Determine impact badge class
-                    impact = row['Impact']
-                    if impact == "HIGH":
-                        impact_class = "impact-high"
-                        impact_icon = "🔥"
-                    elif impact == "MEDIUM":
-                        impact_class = "impact-medium"
-                        impact_icon = "⚡"
-                    else:
-                        impact_class = "impact-low"
-                        impact_icon = "📊"
-                    
-                    # Sentiment score color
-                    score = row['Sentiment Score']
-                    if score >= 70:
-                        score_color = "#00e676"
-                    elif score >= 55:
-                        score_color = "#00c853"
-                    elif score >= 45:
-                        score_color = "#9e9e9e"
-                    elif score >= 30:
-                        score_color = "#ff5252"
-                    else:
-                        score_color = "#d32f2f"
-                    
-                    
-                    # Main News Card - Using Inline Styles
-                    with st.container():
-                        # Determine badge styles based on sentiment
-                        if sentiment == "VERY POSITIVE":
-                            sentiment_style = "background: linear-gradient(135deg, #00e676 0%, #00c853 100%); color: #000; padding: 4px 12px; border-radius: 6px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; display: inline-block;"
-                        elif sentiment == "POSITIVE":
-                            sentiment_style = "background-color: rgba(0, 200, 83, 0.25); color: #00e676; padding: 4px 12px; border-radius: 6px; font-size: 11px; font-weight: 700; text-transform: uppercase; border: 1px solid #00c853; display: inline-block;"
-                        elif sentiment == "NEUTRAL":
-                            sentiment_style = "background-color: rgba(158, 158, 158, 0.2); color: #9e9e9e; padding: 4px 12px; border-radius: 6px; font-size: 11px; font-weight: 700; text-transform: uppercase; display: inline-block;"
-                        elif sentiment == "NEGATIVE":
-                            sentiment_style = "background-color: rgba(255, 82, 82, 0.25); color: #ff5252; padding: 4px 12px; border-radius: 6px; font-size: 11px; font-weight: 700; text-transform: uppercase; border: 1px solid #ff5252; display: inline-block;"
-                        else:  # VERY NEGATIVE
-                            sentiment_style = "background: linear-gradient(135deg, #ff5252 0%, #d32f2f 100%); color: #fff; padding: 4px 12px; border-radius: 6px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; display: inline-block;"
+                    with c_news:
+                        st.markdown("#### 📰 Latest News")
+                        # Main Headline
+                        st.info(f"**Headline**: {row['Headline']}")
                         
-                        # Determine impact badge style
-                        if impact == "HIGH":
-                            impact_style = "background-color: rgba(255, 193, 7, 0.2); color: #ffc107; padding: 3px 8px; border-radius: 4px; font-size: 10px; font-weight: 600; margin-left: 6px; display: inline-block;"
-                        elif impact == "MEDIUM":
-                            impact_style = "background-color: rgba(33, 150, 243, 0.2); color: #2196f3; padding: 3px 8px; border-radius: 4px; font-size: 10px; font-weight: 600; margin-left: 6px; display: inline-block;"
-                        else:  # LOW
-                            impact_style = "background-color: rgba(158, 158, 158, 0.2); color: #9e9e9e; padding: 3px 8px; border-radius: 4px; font-size: 10px; font-weight: 600; margin-left: 6px; display: inline-block;"
+                        # Sentiment Bar
+                        score = row['Sentiment Score']
+                        st.progress(score / 100.0, text=f"Sentiment Score: {score}/100")
                         
-                        # Ticker and badges
-                        st.markdown(f"""
-<div style="margin-bottom: 12px;">
-    <span style="color: #00c853; font-weight: 700; font-size: 16px; margin-right: 8px; letter-spacing: 0.5px;">{row['Ticker']}</span>
-    <span style="{sentiment_style}">{sentiment}</span>
-    <span style="{impact_style}">{impact_icon} {impact} Impact</span>
-</div>
-""", unsafe_allow_html=True)
-                        
-                        # Headline
-                        st.markdown(f"<div style='font-size: 14px; line-height: 1.6; color: #e0e0e0; font-weight: 500; margin-bottom: 12px;'>{row['Headline']}</div>", unsafe_allow_html=True)
-                        
-                        # Sentiment Score Progress Bar
-                        st.markdown(f"<div style='font-size: 11px; color: #888; margin-bottom: 4px;'>Sentiment Score: {score}/100</div>", unsafe_allow_html=True)
-                        st.progress(score / 100.0)
-                        
-                        st.markdown("---")  # Divider
-                        
-                        # Chart Button
-                        st.button(
-                            f"📈 View {row['Ticker']} Chart", 
-                            key=f"btn_news_{i}", 
-                            use_container_width=True,
-                            on_click=set_ticker,
-                            args=(row['Ticker'],)
-                        )
-                        
-                        # Detailed Analysis Expander
-                        with st.expander(f"🔍 Deep Analysis - {row['Ticker']}", expanded=False):
-                            # AI Analysis Summary
-                            st.markdown("### 🤖 AI Analysis Summary")
-                            st.info(row['Analysis'])
-                            
-                            # Technical Indicators
-                            st.markdown("### 📊 Technical Indicators")
-                            col_tech1, col_tech2, col_tech3 = st.columns(3)
-                            
-                            with col_tech1:
-                                trend_color = "🟢" if row['MA Trend'] == 'Bullish' else "🔴"
-                                st.metric("Trend", f"{trend_color} {row['MA Trend']}")
-                            
-                            with col_tech2:
-                                vol_ratio = float(str(row['Vol Ratio']).replace('x',''))
-                                vol_status = "High" if vol_ratio > 1.5 else "Normal"
-                                st.metric("Volume", f"{row['Vol Ratio']}", vol_status)
-                            
-                            with col_tech3:
-                                pbv = float(str(row['PBV']).replace('x',''))
-                                pbv_status = "Undervalued" if pbv < 1.2 else "Fair"
-                                st.metric("PBV", f"{row['PBV']}", pbv_status)
-                            
-                            # News Timeline
-                            if row['News List'] and len(row['News List']) > 0:
-                                st.markdown("### 📰 News Timeline")
-                                for idx, news_item in enumerate(row['News List'][:5]):
-                                    with st.container():
-                                        st.caption(news_item.get('source', 'Unknown Source').upper())
-                                        st.markdown(f"**{news_item.get('title', 'No title')}**")
-                                        st.markdown("---")
-                            
-                            # Investment Reasoning
-                            st.markdown("### 💡 Investment Reasoning")
-                            reasons = []
-                            
-                            if row['MA Trend'] == 'Bullish':
-                                reasons.append("✅ **Trend Bullish**: MA5 > MA20 menunjukkan momentum naik jangka pendek")
-                            else:
-                                reasons.append("⚠️ **Trend Bearish**: MA5 < MA20, perlu konfirmasi reversal")
-                            
-                            vol_ratio = float(str(row['Vol Ratio']).replace('x',''))
-                            if vol_ratio > 2.0:
-                                reasons.append(f"✅ **Volume Spike Ekstrem**: Volume {row['Vol Ratio']} dari rata-rata, indikasi akumulasi besar")
-                            elif vol_ratio > 1.5:
-                                reasons.append(f"✅ **Volume Meningkat**: Volume {row['Vol Ratio']} dari rata-rata, minat beli tinggi")
-                            
-                            pbv = float(str(row['PBV']).replace('x',''))
-                            if pbv < 1.0:
-                                reasons.append(f"✅ **Sangat Undervalued**: PBV {row['PBV']} di bawah 1.0x, valuasi sangat menarik")
-                            elif pbv < 1.2:
-                                reasons.append(f"✅ **Undervalued**: PBV {row['PBV']} di bawah 1.2x, valuasi menarik")
-                            
-                            if score >= 70:
-                                reasons.append(f"✅ **Sentimen Sangat Positif**: Media memberitakan hal sangat positif (Score: {score}/100)")
-                            elif score >= 55:
-                                reasons.append(f"✅ **Sentimen Positif**: Media memberitakan hal positif (Score: {score}/100)")
-                            
-                            # Sector-specific insights
-                            st.markdown("**📈 Faktor Eksternal & Sektor:**")
-                            if row['Ticker'] in ['BBCA', 'BBRI', 'BMRI', 'BBNI', 'BBTN', 'BRIS']:
-                                st.markdown("- 🏦 **Sektor Perbankan**: BI Rate stabil mendukung pertumbuhan kredit, margin NIM solid")
-                            elif row['Ticker'] in ['ADRO', 'PTBA', 'ITMG', 'PGAS', 'MEDC']:
-                                st.markdown("- ⚡ **Sektor Energi**: Harga komoditas global masih tinggi, margin operasional kuat")
-                            elif row['Ticker'] in ['ASII', 'UNTR']:
-                                st.markdown("- 🚗 **Otomotif/Heavy Equipment**: Pemulihan ekonomi dorong penjualan kendaraan & alat berat")
-                            elif row['Ticker'] in ['GOTO', 'BUKA']:
-                                st.markdown("- 📱 **Tech/E-commerce**: Penetrasi digital Indonesia terus meningkat, GMV naik")
-                            elif row['Ticker'] in ['ANTM', 'INCO', 'TINS', 'MDKA']:
-                                st.markdown("- ⛏️ **Mining/Metal**: Permintaan global untuk nikel & timah masih kuat untuk EV battery")
-                            elif row['Ticker'] in ['CPIN', 'JPFA', 'ICBP', 'INDF', 'UNVR']:
-                                st.markdown("- 🍗 **Consumer Goods**: Konsumsi domestik stabil, brand loyalty tinggi")
-                            elif row['Ticker'] in ['BSDE', 'PWON', 'CTRA', 'SMRA']:
-                                st.markdown("- 🏠 **Property**: Suku bunga KPR kompetitif, permintaan hunian meningkat")
-                            
-                            st.markdown("**🎯 Alasan Rekomendasi:**")
-                            for reason in reasons:
-                                st.markdown(reason)
-                            
-                            # Final Recommendation
-                            if row['Status'] == '🔥 STRONG BUY':
-                                st.success(f"""
-                                **✅ KESIMPULAN: STRONG BUY**
+                        # Timeline
+                        if row['News List']:
+                            for news_item in row['News List'][:3]:
+                                st.caption(f"{news_item.get('source','').upper()} • {news_item.get('date','')}")
+                                st.markdown(f"[{news_item.get('title')}]({news_item.get('link')})")
+                                st.markdown("---")
                                 
-                                Semua indikator teknikal dan fundamental mendukung. Kombinasi trend bullish, volume tinggi, 
-                                valuasi menarik, dan sentimen positif menciptakan setup ideal untuk entry. 
-                                
-                                **Target Gain**: 5-15% dalam 3-7 hari trading
-                                **Risk Level**: Medium
-                                **Rekomendasi**: Beli bertahap dengan stop loss di support terdekat
-                                """)
-                            elif row['Status'] == '✅ WATCHLIST':
-                                st.warning(f"""
-                                **⚠️ KESIMPULAN: WATCHLIST**
-                                
-                                Beberapa indikator positif terdeteksi, namun perlu konfirmasi lebih lanjut. 
-                                Masukkan ke watchlist untuk monitoring pergerakan harga dan volume.
-                                
-                                **Action**: Monitor breakout level resistance atau konfirmasi volume
-                                **Risk Level**: Medium-High
-                                **Rekomendasi**: Tunggu konfirmasi signal sebelum entry
-                                """)
+                        st.button(f"📈 Load Chart: {row['Ticker']}", key=f"btn_{i}", on_click=set_ticker, args=(row['Ticker'],))
+
+                    with c_analysis:
+                        st.markdown("#### 🤖 AI Analysis")
+                        st.write(row['Analysis'])
                         
-                        st.write("")  # Spacer
+                        st.markdown("#### 📊 Key Indicators")
+                        k1, k2, k3 = st.columns(3)
+                        k1.metric("Trend", row['MA Trend'])
+                        k2.metric("Vol Ratio", f"{row['Raw Vol Ratio']:.1f}x")
+                        k3.metric("PBV", f"{row['Raw PBV']:.2f}x")
+                        
+                        # Recommendation
+                        if 'STRONG BUY' in row['Status']:
+                            st.success("**RECOMMENDATION: BUY**\n\nTrend Bullish + High Volume + Positive Sentiment.")
+                        else:
+                            st.warning("**RECOMMENDATION: WATCH**\n\nMonitor for breakout or volume confirmation.")
 
 # Footer
 st.markdown("""
