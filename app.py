@@ -446,6 +446,7 @@ with st.sidebar:
     # Action Buttons
     if st.button("RUN SCREENER", type="primary", use_container_width=True):
         st.session_state.run_screener = True
+        st.session_state.active_tab = "🔬 Research & News"
     
     if st.button("CLEAR RESULTS", use_container_width=True):
         st.session_state.scan_results = None
