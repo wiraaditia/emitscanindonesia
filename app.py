@@ -228,16 +228,25 @@ def get_stock_data(ticker):
         hist = stock.history(period="1mo")
         if len(hist) < 20: return None
         
-        # Fundamental data kadang bikin lemot/error, kita wrap try-except ketat
+        # Fundamental data
         try: 
-            # Dapatkan info lengkap
             info = stock.info
             pbv = info.get('priceToBook', 0)
+            
+            # Fetch Cash Flow for better accuracy
+            cf = stock.cashflow
+            latest_cf = cf.iloc[:, 0] if not cf.empty else {}
+            fcf = latest_cf.get('Free Cash Flow', 0)
+            ocf = latest_cf.get('Operating Cash Flow', 0)
+            cash_status = "BAIK" if (fcf > 0 or ocf > 0) else "BURUK"
+            if fcf == 0 and ocf == 0: cash_status = "N/A"
+            
         except: 
             info = {}
             pbv = 0
+            cash_status = "N/A"
             
-        return hist, pbv, info
+        return hist, pbv, info, cash_status
     except Exception as e:
         return None
 
@@ -439,7 +448,7 @@ def get_news_sentiment(ticker):
 def analyze_stock(ticker):
     data = get_stock_data(ticker)
     if not data: return None
-    hist, pbv, info = data
+    hist, pbv, info, cash_status = data
     
     curr_price = hist['Close'].iloc[-1]
     prev_close = hist['Close'].iloc[-2]
@@ -463,6 +472,10 @@ def analyze_stock(ticker):
     cond_trend = ma5 > ma20
     cond_big_player = (vol_ratio > 2.0) and (abs(chg_pct) < 4)
     cond_sentiment = score >= 55  # Use sentiment score instead of just "POSITIVE"
+    
+    # Fundamental Health
+    roe = info.get('returnOnEquity', 0)
+    debt_equity = info.get('debtToEquity', 0)
     
     status = "HOLD"
     final_score = 0
@@ -491,7 +504,10 @@ def analyze_stock(ticker):
         "News List": news_list,
         "Analysis": analysis,
         "Raw Vol Ratio": vol_ratio,
-        "Raw PBV": pbv
+        "Raw PBV": pbv,
+        "Fin Health": cash_status,
+        "ROE": roe * 100 if roe else 0,
+        "DER": debt_equity if debt_equity else 0
     }
 
 # Helper untuk mengubah ticker dari News Feed
@@ -500,12 +516,65 @@ def set_ticker(ticker):
     st.session_state.ticker_selector = ticker.replace('.JK', '')
     # Force switch to Market Dashboard
     st.session_state.active_tab = "📈 Market Dashboard"
+    # Set scroll to top flag
+    st.session_state.scroll_to_top = True
 
 # --- MAIN UI ---
 
 # Initialization for Ticker Selector (Since old widget is removed)
 if 'ticker_selector' not in st.session_state:
     st.session_state.ticker_selector = "BBCA" # Default Startup Ticker
+
+if 'scroll_to_top' not in st.session_state:
+    st.session_state.scroll_to_top = False
+
+if 'show_search' not in st.session_state:
+    st.session_state.show_search = False
+
+# JavaScript for scrolling to top
+if st.session_state.get('scroll_to_top', False):
+    import time
+    # Use a dynamic fragment in the HTML to ensure it's seen as new content
+    ts = int(time.time() * 1000)
+    components.html(
+        f"""
+        <div id="scroll-marker-{ts}" style="display:none;"></div>
+        <script>
+            function performScroll() {{
+                try {{
+                    var selectors = [
+                        '[data-testid="stMainBlockContainer"]',
+                        '.main',
+                        'section.main',
+                        '.stApp'
+                    ];
+                    var scrolled = false;
+                    for (var i = 0; i < selectors.length; i++) {{
+                        var container = window.parent.document.querySelector(selectors[i]);
+                        if (container) {{
+                            container.scrollTo({{top: 0, behavior: 'auto'}});
+                            scrolled = true;
+                        }}
+                    }}
+                    if (!scrolled) {{
+                        window.parent.scrollTo(0, 0);
+                        window.top.scrollTo(0, 0);
+                    }}
+                }} catch (e) {{
+                    window.parent.scrollTo(0, 0);
+                }}
+            }}
+            // Execute multiple times to ensure it catches the page state
+            performScroll();
+            setTimeout(performScroll, 30);
+            setTimeout(performScroll, 100);
+            setTimeout(performScroll, 300);
+        </script>
+        """,
+        height=0
+    )
+    # Set back to False so it doesn't scroll on EVERY rerun, only when triggered
+    st.session_state.scroll_to_top = False
 
 
 # --- UI COMPONENT: SIDEBAR (WATCHLIST ONLY) ---
@@ -564,12 +633,32 @@ with st.sidebar:
     </div>
     """, unsafe_allow_html=True)
     
-    # Refresh Button
-    if st.button("🔄 Refresh Prices", use_container_width=True, type="secondary"):
-        clear_watchlist_cache()
-        if 'watchlist_data_list' in st.session_state:
-            del st.session_state.watchlist_data_list
-        st.rerun()
+    # Action Bar: Search & Refresh
+    s_col1, s_col2 = st.columns([1, 4])
+    with s_col1:
+        if st.button("🔍", help="Cari Emiten"):
+            st.session_state.show_search = not st.session_state.show_search
+            st.rerun()
+    with s_col2:
+        if st.button("🔄 Refresh Prices", use_container_width=True, type="secondary"):
+            clear_watchlist_cache()
+            if 'watchlist_data_list' in st.session_state:
+                del st.session_state.watchlist_data_list
+            st.rerun()
+
+    # Search Input (Conditional)
+    if st.session_state.show_search:
+        search_ticker = st.selectbox(
+            "Cari Kode Saham:",
+            options=[t.replace('.JK', '') for t in TICKERS],
+            index=None,
+            placeholder="Ketik kode (misal: BBCA)...",
+            label_visibility="collapsed"
+        )
+        if search_ticker:
+            set_ticker(search_ticker)
+            st.session_state.show_search = False
+            st.rerun()
     
     st.markdown("<div style='margin-bottom: 10px;'></div>", unsafe_allow_html=True)
     
@@ -906,7 +995,7 @@ st.markdown(header_html, unsafe_allow_html=True)
 
 
 # Main Content Tabs
-tab_chart, tab_financials = st.tabs(["🔥 Chart", "📊 Financials"])
+tab_chart, tab_financials = st.tabs(["🔥 Chart", "📊 Financial statement"])
 
 with tab_chart:
     # Layout: Chart on Left, Order Book on Right
@@ -1289,6 +1378,14 @@ with tab_chart:
                         k2.metric("Vol", f"{row['Raw Vol Ratio']:.1f}x")
                         k3.metric("PBV", f"{row['Raw PBV']:.2f}x")
                         
+                        # Financial Summary Row
+                        f_col1, f_col2 = st.columns(2)
+                        row_fin_health = row.get('Fin Health', 'N/A')
+                        row_roe = row.get('ROE', 0)
+                        health_color = "#00c853" if row_fin_health == "BAIK" else ("#ff5252" if row_fin_health == "BURUK" else "#848e9c")
+                        f_col1.markdown(f"<span style='font-size: 11px; color: #848e9c;'>Kas:</span> <span style='font-size: 11px; font-weight: 700; color: {health_color};'>{row_fin_health}</span>", unsafe_allow_html=True)
+                        f_col2.markdown(f"<span style='font-size: 11px; color: #848e9c;'>ROE:</span> <span style='font-size: 11px; font-weight: 700; color: #fff;'>{row_roe:.1f}%</span>", unsafe_allow_html=True)
+                        
                         st.markdown("---")
                         st.write(row['Analysis'])
                         
@@ -1310,29 +1407,101 @@ with tab_chart:
             )
 
 with tab_financials:
-    st.markdown(f"### 📊 Financial Highlights: {current_symbol}")
+    st.markdown(f"### 📊 Laporan Financial Perusahaan: {current_symbol}")
     
     # Try fetching real data via yfinance
     try:
         yf_ticker = yf.Ticker(current_symbol + ".JK")
-        info = yf_ticker.info
         
-        f1, f2, f3 = st.columns(3)
-        with f1:
-            st.metric("Market Cap", f"Rp {info.get('marketCap', 0)/1e12:.2f} T")
-            st.metric("Trailing P/E", f"{info.get('trailingPE', 0):.2f}x")
-        with f2:
-            st.metric("Revenue (TTM)", f"Rp {info.get('totalRevenue', 0)/1e12:.2f} T")
-            st.metric("Price/Book", f"{info.get('priceToBook', 0):.2f}x")
-        with f3:
-            st.metric("Dividend Yield", f"{info.get('dividendYield', 0)*100:.2f}%" if info.get('dividendYield') else "-")
-            st.metric("ROE", f"{info.get('returnOnEquity', 0)*100:.2f}%" if info.get('returnOnEquity') else "-")
+        # Helper to get latest from Annual or Quarterly
+        def get_latest_financials(annual_df, quarterly_df):
+            if annual_df.empty and quarterly_df.empty: return None, None, ""
             
-        st.markdown("#### 📑 Income Statement (Annual)")
-        st.dataframe(yf_ticker.income_stmt.T.head(3), use_container_width=True)
+            # Sort both to get latest
+            latest_annual_date = sorted(annual_df.columns, reverse=True)[0] if not annual_df.empty else None
+            latest_quarterly_date = sorted(quarterly_df.columns, reverse=True)[0] if not quarterly_df.empty else None
+            
+            if latest_quarterly_date and (not latest_annual_date or latest_quarterly_date > latest_annual_date):
+                return quarterly_df.reindex(sorted(quarterly_df.columns, reverse=True), axis=1), latest_quarterly_date, " (Quarterly)"
+            return annual_df.reindex(sorted(annual_df.columns, reverse=True), axis=1), latest_annual_date, " (Annual)"
+
+        # 1. Neraca (Balance Sheet)
+        st.markdown("#### 🏦 1. Neraca (Balance Sheet)")
+        bs, latest_date_bs, bs_type = get_latest_financials(yf_ticker.balance_sheet, yf_ticker.quarterly_balance_sheet)
         
+        if bs is not None:
+            latest_bs = bs.iloc[:, 0]
+            st.caption(f"Data per: **{latest_date_bs.strftime('%Y-%m-%d')}**{bs_type}")
+            aset = latest_bs.get('Total Assets', 0)
+            liab = latest_bs.get('Total Liabilities Net Minority Interest', latest_bs.get('Total Liab', 0))
+            ekuitas = latest_bs.get('Stockholders Equity', latest_bs.get('Total Equity Gross Minority Interest', 0))
+            
+            n1, n2, n3 = st.columns(3)
+            n1.metric("Aset", f"Rp {aset/1e12:.2f} T" if aset > 0 else "-")
+            n2.metric("Liabilitas", f"Rp {liab/1e12:.2f} T" if liab > 0 else "-")
+            n3.metric("Ekuitas", f"Rp {ekuitas/1e12:.2f} T" if ekuitas > 0 else "-")
+            
+            with st.expander("Detail Neraca"):
+                st.dataframe(bs.T.head(4), use_container_width=True)
+        else:
+            st.warning("Data Neraca tidak tersedia.")
+
+        # 2. Income Statement
+        st.markdown("#### 📈 2. Income Statement")
+        is_stmt, latest_date_is, is_type = get_latest_financials(yf_ticker.income_stmt, yf_ticker.quarterly_income_stmt)
+        
+        if is_stmt is not None:
+            latest_is = is_stmt.iloc[:, 0]
+            st.caption(f"Data per: **{latest_date_is.strftime('%Y-%m-%d')}**{is_type}")
+            revenue = latest_is.get('Total Revenue', 0)
+            net_income = latest_is.get('Net Income', 0)
+            expenses = latest_is.get('Total Operating Expenses', latest_is.get('Operating Expense', revenue - net_income))
+            
+            i1, i2, i3 = st.columns(3)
+            i1.metric("Pendapatan", f"Rp {revenue/1e12:.2f} T" if revenue > 0 else "-")
+            i2.metric("Beban", f"Rp {expenses/1e12:.2f} T" if expenses > 0 else "-")
+            i3.metric("Laba Bersih", f"Rp {net_income/1e12:.2f} T" if net_income != 0 else "-")
+            
+            with st.expander("Detail Rugi Laba"):
+                st.dataframe(is_stmt.T.head(4), use_container_width=True)
+        else:
+            st.warning("Data Income Statement tidak tersedia.")
+
+        # 3. Cashflow Statement
+        st.markdown("#### 💵 3. Cashflow Statement")
+        cf, latest_date_cf, cf_type = get_latest_financials(yf_ticker.cashflow, yf_ticker.quarterly_cashflow)
+        
+        if cf is not None:
+            latest_cf = cf.iloc[:, 0]
+            st.caption(f"Data per: **{latest_date_cf.strftime('%Y-%m-%d')}**{cf_type}")
+            fcf = latest_cf.get('Free Cash Flow', 0)
+            ocf = latest_cf.get('Operating Cash Flow', latest_cf.get('Cash Flow From Continuing Operating Activities', 0))
+            
+            c1, c2 = st.columns(2)
+            c1.metric("Arus Kas Operasi", f"Rp {ocf/1e12:.2f} T" if ocf != 0 else "-")
+            c2.metric("Free Cash Flow", f"Rp {fcf/1e12:.2f} T" if fcf != 0 else "-")
+            
+            # Decision: Good or Bad
+            status_kas = "BAIK ✅" if fcf > 0 and ocf > 0 else "BURUK ⚠️"
+            color_kas = "#00c853" if status_kas == "BAIK ✅" else "#ff5252"
+            
+            st.markdown(f"""
+            <div style="background: rgba(255,255,255,0.05); padding: 15px; border-radius: 8px; border-left: 5px solid {color_kas}; margin-top: 10px;">
+                <span style="font-size: 14px; font-weight: 600; color: #848e9c;">KESIMPULAN KAS:</span><br>
+                <span style="font-size: 20px; font-weight: 800; color: {color_kas};">Laporan Kas ini sedang {status_kas}</span>
+                <p style="font-size: 12px; color: #d1d4dc; margin-top: 5px;">
+                    {'Perusahaan memiliki arus kas operasional positif dan mampu menghasilkan free cash flow.' if status_kas == 'BAIK ✅' else 'Perusahaan mengalami kesulitan dalam menghasilkan arus kas bebas atau operasional yang positif.'}
+                </p>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            with st.expander("Detail Arus Kas"):
+                st.dataframe(cf.T.head(4), use_container_width=True)
+        else:
+            st.warning("Data Cashflow tidak tersedia.")
+            
     except Exception as e:
-        st.error(f"Failed to fetch financial data: {e}")
-        st.warning("Profile data unavailable.")
+        st.error(f"Gagal mengambil data finansial detail: {e}")
+        st.warning("Coba muat ulang fitur ini.")
 
 
