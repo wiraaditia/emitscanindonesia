@@ -1080,7 +1080,7 @@ with tab_chart:
             # Re-fetch or reuse logic if optimized, but for now safe to call our cached function
             sidebar_data = get_stock_data(current_symbol + ".JK")
             if sidebar_data:
-                sb_hist, sb_pbv, sb_info = sidebar_data
+                sb_hist, sb_pbv, sb_info, sb_cash = sidebar_data
                 # Current Price from history to be safe
                 sb_price = sb_hist['Close'].iloc[-1]
                 sb_prev = sb_hist['Close'].iloc[-2]
