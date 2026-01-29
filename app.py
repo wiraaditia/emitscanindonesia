@@ -7,7 +7,7 @@ from streamlit_autorefresh import st_autorefresh
 import streamlit.components.v1 as components
 import time
 import random
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import pickle
 import os
 import numpy as np
@@ -360,6 +360,154 @@ def calculate_rsi(series, period=14):
 def calculate_obv(df):
     obv = (np.sign(df['Close'].diff()) * df['Volume']).fillna(0).cumsum()
     return obv
+
+    return obv
+
+# --- EMA CALCULATIONS & DYNAMIC TIMEFRAMES ---
+def calculate_ema(series, span):
+    return series.ewm(span=span, adjust=False).mean()
+
+# Timeframe Configurations
+TF_CONFIG = {
+    "Daily (D1)": {"label": "Daily", "period": "6mo", "interval": "1d", "resample": None},
+    "4 Jam (H4)": {"label": "H4", "period": "3mo", "interval": "1h", "resample": "4h"},
+    "1 Jam (H1)": {"label": "H1", "period": "1mo", "interval": "1h", "resample": None},
+    "15 Menit (M15)": {"label": "M15", "period": "5d", "interval": "15m", "resample": None},
+    "5 Menit (M5)": {"label": "M5", "period": "5d", "interval": "5m", "resample": None}
+}
+
+def process_timeframe_data(ticker, config):
+    try:
+        # Fetch Data
+        hist = yf.download(ticker, period=config['period'], interval=config['interval'], progress=False)
+        
+        # Flatten MultiIndex robustly
+        if isinstance(hist.columns, pd.MultiIndex):
+            # If 'Close' is in top level (Level 0), keep it
+            if 'Close' in hist.columns.get_level_values(0):
+                hist.columns = hist.columns.get_level_values(0)
+            # If 'Close' is in second level (Level 1), keep that
+            elif len(hist.columns.levels) > 1 and 'Close' in hist.columns.get_level_values(1):
+                hist.columns = hist.columns.get_level_values(1)
+            
+        if hist.empty or 'Close' not in hist.columns: return None, 0, 0, 0
+        
+        # Resample if needed
+        if config['resample']:
+            ohlc_dict = {'Close': 'last'}
+            # Resample returns a DatetimeIndex usually
+            hist = hist.resample(config['resample']).apply(ohlc_dict).dropna()
+        
+        if len(hist) < 50: return None, 0, 0, 0 # Not enough data for EMA50
+        
+        # Calculate EMAs
+        ema20 = calculate_ema(hist['Close'], 20)
+        ema50 = calculate_ema(hist['Close'], 50)
+        
+        last_close = hist['Close'].iloc[-1]
+        last_ema20 = ema20.iloc[-1]
+        last_ema50 = ema50.iloc[-1]
+        
+        # --- TICKER DATA VERIFICATION ---
+        # Ensure 'Close' column isn't polluted by other tickers if MultiIndex was weird
+        if isinstance(hist['Close'], pd.DataFrame):
+             # This happens if there was a leak. We want the column matching Our ticker.
+             if ticker in hist['Close'].columns:
+                 last_close = hist['Close'][ticker].iloc[-1]
+                 last_ema20 = calculate_ema(hist['Close'][ticker], 20).iloc[-1]
+                 last_ema50 = calculate_ema(hist['Close'][ticker], 50).iloc[-1]
+        
+        # Check Previous Candle for "Fresh Cross"
+        if len(ema20) < 2: return None, 0, 0, False
+        prev_ema20 = ema20.iloc[-2]
+        prev_ema50 = ema50.iloc[-2]
+        
+        # Distance %
+        dist = (last_ema20 - last_ema50) / last_close * 100
+        
+        status = "NEUTRAL"
+        
+        # 1. FRESH CROSS (Last Candle)
+        is_fresh_golden = (prev_ema20 <= prev_ema50) and (last_ema20 > last_ema50)
+        is_fresh_death = (prev_ema20 >= prev_ema50) and (last_ema20 < last_ema50)
+        
+        # Distance Filter for "Fresh" (User: "jaraknya jangan jauh")
+        # For fresh cross, it's usually small anyway.
+        
+        if is_fresh_golden and abs(dist) < 0.5:
+            status = "✨ FRESH GOLDEN CROSS (Baru Naik)"
+        elif is_fresh_death and abs(dist) < 0.5:
+            status = "⚠️ FRESH DEATH CROSS (Baru Turun)"
+        
+        # 2. POTENTIAL / SIAP (Very Tight, < 0.2%)
+        elif abs(dist) < 0.2:
+             if dist < 0: status = "✨ POTENSI GOLDEN CROSS (Mau Naik)"
+             else: status = "⚠️ POTENSI DEATH CROSS (Mau Turun)"
+             
+        # 3. NORMAL TREND
+        elif dist > 0:
+            status = "📈 BULLISH (Uptrend)"
+        else:
+            status = "📉 BEARISH (Downtrend)"
+        
+        return status, dist, last_close, True
+        
+    except:
+        return None, 0, 0, False
+
+def get_ema_cross_status_dynamic(ticker, tf1_name, tf2_name=None):
+    tf1_cfg = TF_CONFIG.get(tf1_name)
+    tf2_cfg = TF_CONFIG.get(tf2_name) if tf2_name else None
+    
+    if not tf1_cfg: return None
+    
+    # Process TF 1 (Major Trend)
+    status_1, dist_1, price, success_1 = process_timeframe_data(ticker, tf1_cfg)
+    if not success_1: return None
+    
+    # Process TF 2 (Entry Signal) - Optional
+    status_2 = "OFF"
+    dist_2 = 0
+    success_2 = False
+    
+    if tf2_cfg:
+        status_2, dist_2, _, success_2 = process_timeframe_data(ticker, tf2_cfg)
+    
+    # Determine Cross Type for Sort/Filter
+    cross_type = "None"
+    
+    # Priority Logic for Sorting
+    # 1. Fresh Crosses (Top Priority)
+    # 2. Potential Crosses
+    # 3. Bullish/Bearish
+    
+    is_fresh = "FRESH" in status_1
+    is_pot = "POTENSI" in status_1
+    
+    if is_fresh: cross_type = f"🚀 {tf1_cfg['label']} BARU CROSS"
+    elif is_pot: cross_type = f"⚡ {tf1_cfg['label']} SIAP CROSS"
+    elif "BULLISH" in status_1 and "BULLISH" in status_2: cross_type = "✅ STRONG UPTREND"
+    elif "BEARISH" in status_1 and "BEARISH" in status_2: cross_type = "🔻 STRONG DOWNTREND"
+    
+    
+    # Filter Logic: Return everything but Sort by Priority
+    is_relevant = True
+    
+    if not is_relevant: return None # Keep original safety check if any
+
+    result = {
+        "Ticker": ticker.replace('.JK',''),
+        "Price": int(price),
+        f"Status {tf1_cfg['label']}": status_1,
+        f"Dist {tf1_cfg['label']} (%)": round(dist_1, 2),
+        "Cross Type": cross_type
+    }
+    
+    if tf2_cfg:
+        result[f"Status {tf2_cfg['label']}"] = status_2 if success_2 else "N/A"
+        result[f"Dist {tf2_cfg['label']} (%)"] = round(dist_2, 2) if success_2 else 0
+        
+    return result
 
 # --- FUNGSI LOGIKA (SAFE VERSION) ---
 @st.cache_data(ttl=600) # Cache 10 mins
@@ -1371,7 +1519,7 @@ st.markdown(header_html, unsafe_allow_html=True)
 
 
 # Main Content Tabs - PERSISTENT
-main_tabs_options = ["Chart", "Financial statement", "Professional Analyst Advisor"]
+main_tabs_options = ["Chart", "Financial statement", "Professional Analyst Advisor", "Screener EMA"]
 if 'main_active_tab' not in st.session_state or st.session_state.main_active_tab not in main_tabs_options:
     st.session_state.main_active_tab = "Chart"
 
@@ -2863,5 +3011,178 @@ Silakan tanyakan lagi dengan topik yang lebih spesifik!
         """,
         height=520,
     )
+
+
+
+elif main_active_tab == "Screener EMA":
+    st.markdown("## ⚡ Screener EMA Cross (Multi-Timeframe)")
+    st.caption("Pindai emiten potensial berdasarkan persilangan EMA 20 dan EMA 50 pada timeframe pilihan Anda.")
+    
+    # --- PERSISTENCE & TIMEOUT logic ---
+    import time
+    if 'ema_last_active' not in st.session_state:
+        st.session_state.ema_last_active = time.time()
+        
+    # Timeout 5 minutes (300 seconds)
+    if st.session_state.get('ema_results_data'):
+        if (time.time() - st.session_state.ema_last_active) > 300:
+            st.session_state.ema_results_data = None
+            st.session_state.ema_last_active = time.time()
+
+    # --- CONFIGURATION BAR ---
+    tf_options = list(TF_CONFIG.keys())
+    col_tf1, col_tf2, col_mode, col_act = st.columns([2, 2, 2, 2])
+    
+    with col_tf1:
+        selected_tf1 = st.selectbox("Timeframe Utama", options=tf_options, index=0)
+    with col_tf2:
+        use_tf2 = st.checkbox("Gunakan Timeframe Kedua", value=True)
+        selected_tf2 = st.selectbox("Timeframe Kedua", options=tf_options, index=1) if use_tf2 else None
+    with col_mode:
+        sinyal_filter = st.radio("Filter Sinyal", ["🚀 Mau Naik (Bullish)", "🔻 Mau Turun (Bearish)", "🏠 Semua"], index=2)
+    with col_act:
+        st.markdown("<div style='margin-top: 28px;'></div>", unsafe_allow_html=True)
+        run_ema_btn = st.button("Jalankan Scanner", type="primary", use_container_width=True)
+    
+    st.markdown("---")
+    
+    if run_ema_btn:
+        st.session_state.run_ema_screener_internal = True
+        st.session_state.ema_last_active = time.time()
+        st.session_state.tf_selection = (selected_tf1, selected_tf2 if use_tf2 else None)
+        st.session_state.current_sinyal_filter = sinyal_filter
+        
+    if st.session_state.get('run_ema_screener_internal', False):
+        st.session_state.run_ema_screener_internal = False
+        tf1_sel, tf2_sel = st.session_state.get('tf_selection', (selected_tf1, selected_tf2))
+        
+        results_ema = []
+        progress_bar = st.progress(0, text="Memulai pemindaian EMA...")
+        try:
+            active_tickers = TICKERS  
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                future_to_ticker = {executor.submit(get_ema_cross_status_dynamic, t, tf1_sel, tf2_sel): t for t in active_tickers}
+                completed = 0
+                for future in as_completed(future_to_ticker):
+                    completed += 1
+                    ticker = future_to_ticker[future]
+                    progress_bar.progress(completed / len(active_tickers), text=f"Scanning {ticker}...")
+                    try:
+                        data = future.result()
+                        if data: results_ema.append(data)
+                    except: pass
+            progress_bar.empty()
+            st.session_state.ema_results_data = results_ema
+            st.session_state.ema_active_tf = (tf1_sel, tf2_sel)
+            st.session_state.ema_last_active = time.time()
+        except Exception as e:
+            st.error(f"Error scanning: {str(e)}")
+
+    # --- DISPLAY RESULTS (PERSISTENT) ---
+    results_stored = st.session_state.get('ema_results_data')
+    if results_stored:
+        st.session_state.ema_last_active = time.time() # Update activity
+        tf1_sel, tf2_sel = st.session_state.get('ema_active_tf', (selected_tf1, None))
+        current_filter = st.session_state.get('current_sinyal_filter', "🏠 Semua")
+        
+        df_ema = pd.DataFrame(results_stored)
+        lbl1 = TF_CONFIG[tf1_sel]['label']
+        lbl2 = TF_CONFIG[tf2_sel]['label'] if tf2_sel else None
+        
+        # Filter Logic
+        if "Naik" in current_filter:
+            df_ema = df_ema[df_ema[f'Status {lbl1}'].str.contains('Naik|BULLISH', na=False)]
+        elif "Turun" in current_filter:
+            df_ema = df_ema[df_ema[f'Status {lbl1}'].str.contains('Turun|BEARISH', na=False)]
+        
+        if df_ema.empty:
+            st.warning(f"Tidak ada data '{current_filter}' yang ditemukan.")
+        else:
+            def get_sort_val(row):
+                ct = row['Cross Type']
+                if "BARU CROSS" in ct: return 0
+                if "SIAP CROSS" in ct: return 1
+                return 2
+            df_ema['Sort'] = df_ema.apply(get_sort_val, axis=1)
+            df_ema = df_ema.sort_values('Sort').drop('Sort', axis=1)
+            
+            st.success(f"Ditemukan {len(df_ema)} emiten ({current_filter}). Data tersimpan (5m).")
+            
+            tv_tf_map = {"M5": "5", "M15": "15", "H1": "60", "H4": "240", "Daily": "D"}
+            main_tv_tf = tv_tf_map.get(tf1_sel, "D")
+            
+            df_display = df_ema.head(20)
+            if len(df_ema) > 20: st.info("💡 Menampilkan Top 20 Sinyal dengan Chart.")
+            
+            cols_per_row = 2
+            for i in range(0, len(df_display), cols_per_row):
+                row_data = df_display.iloc[i : i + cols_per_row]
+                cols = st.columns(cols_per_row)
+                for col_idx, (idx, row) in enumerate(row_data.iterrows()):
+                    ticker_label = str(row['Ticker'])
+                    chart_symbol = f"IDX:{ticker_label}"
+                    is_bull = "Naik" in row[f'Status {lbl1}'] or "BULLISH" in row[f'Status {lbl1}']
+                    
+                    with cols[col_idx]:
+                        container_id = f"tv_card_{ticker_label}_{i}"
+                        dist_text = f"<b>Jarak {lbl1}:</b> {row[f'Dist {lbl1} (%)']}%"
+                        if lbl2: dist_text += f" | <b>Jarak {lbl2}:</b> {row[f'Dist {lbl2} (%)']}%"
+                        
+                        st.components.v1.html(f"""
+                        <style>
+                            body {{ background: transparent; margin: 0; font-family: sans-serif; overflow: hidden; }}
+                            .card {{ 
+                                background: #1a1b22; border-radius: 12px; padding: 12px; border: 1px solid #333; 
+                                height: 350px; color: white; display: flex; flex-direction: column;
+                            }}
+                            .row {{ display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 5px; }}
+                            .ticker-title {{ font-size: 18px; font-weight: 800; color: #fff; }}
+                            .price-subtitle {{ font-size: 14px; color: #848e9c; font-weight: 500; }}
+                            .pill {{ font-size: 11px; padding: 4px 10px; border-radius: 4px; font-weight: 700; border: 1px solid rgba(255,255,255,0.1); }}
+                            .bullish {{ color: #10d35e; background: rgba(16, 211, 94, 0.1); border-color: #10d35e; }}
+                            .bearish {{ color: #ff5252; background: rgba(255, 82, 82, 0.1); border-color: #ff5252; }}
+                            .dist-line {{ font-size: 11px; color: #848e9c; margin-bottom: 10px; }}
+                            .tv-chart {{ flex-grow: 1; border-radius: 8px; overflow: hidden; border: 1px solid #2a2e39; }}
+                        </style>
+                        <div class="card">
+                            <div class="row">
+                                <div><div class="ticker-title">{ticker_label}</div><div class="price-subtitle">Rp {row['Price']}</div></div>
+                                <div class="pill {'bullish' if is_bull else 'bearish'}">{row[f'Status {lbl1}']}</div>
+                            </div>
+                            <div class="dist-line">{dist_text}</div>
+                            <div id="{container_id}" class="tv-chart"></div>
+                        </div>
+                        <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
+                        <script type="text/javascript">
+                        new TradingView.widget({{
+                          "autosize": true,
+                          "symbol": "{chart_symbol}",
+                          "interval": "{main_tv_tf}",
+                          "timezone": "Asia/Jakarta",
+                          "theme": "dark",
+                          "style": "1",
+                          "locale": "en",
+                          "enable_publishing": false,
+                          "hide_top_toolbar": false,
+                          "withdateranges": true,
+                          "hide_legend": true,
+                          "hide_volume": true,
+                          "container_id": "{container_id}",
+                          "studies": ["Moving Average Exponential@tv-basicstudies", "Moving Average Exponential@tv-basicstudies"],
+                          "studies_overrides": {{
+                            "moving average exponential.length": 20,
+                            "moving average exponential.lineColor": "#FF5252",
+                            "moving average exponential.1.length": 50,
+                            "moving average exponential.1.lineColor": "#2196F3"
+                          }},
+                          "overrides": {{
+                            "paneProperties.background": "#131722",
+                            "mainSeriesProperties.showPriceLine": true
+                          }}
+                        }});
+                        </script>
+                        """, height=370)
+    else:
+        st.info("👋 Klik 'Jalankan Scanner' untuk memulai pemindaian emiten.")
 
 
