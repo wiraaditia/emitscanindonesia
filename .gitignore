@@ -66,3 +66,4 @@ NEWS_ANALYSIS_FEATURE.md
 
 # Cache files
 *.pkl
+.venv_fix/
